@@ -1,0 +1,603 @@
+--- NearbyConnectionsManager_original.kt	2026-10-10 15:55:07.192588062 +0530
++++ app/src/main/java/com/example/resqmesh/NearbyConnectionsManager.kt	2026-10-10 15:55:53.441979506 +0530
+@@ -1,6 +1,8 @@
+ package com.example.resqmesh
+ 
+ import android.content.Context
++import android.os.Handler
++import android.os.Looper
+ import android.util.Log
+ import com.google.android.gms.nearby.Nearby
+ import com.google.android.gms.nearby.connection.AdvertisingOptions
+@@ -20,23 +22,11 @@
+ import java.util.concurrent.locks.ReentrantLock
+ import kotlin.concurrent.withLock
+ 
+-/**
+- * Manages the Google Nearby Connections lifecycle for ResQMesh.
+- *
+- * Uses [Strategy.P2P_CLUSTER] so that all devices in proximity can discover
+- * and connect to each other (many-to-many mesh foundation).
+- *
+- * Thread-safety: all state mutation happens inside [lock].
+- */
+ class NearbyConnectionsManager(
+     context: Context,
+     private val listener: Listener
+ ) {
+-
+-    // ── Public interface ──────────────────────────────────────────────────────
+-
+     interface Listener {
+-        /** Called on the calling thread (main or bg — caller decides). */
+         fun onStatusChanged(status: String)
+         fun onPeerConnected(endpointId: String, endpointName: String)
+         fun onPeerDisconnected(endpointId: String)
+@@ -44,196 +34,292 @@
+         fun onError(message: String)
+     }
+ 
+-    // ── Constants ─────────────────────────────────────────────────────────────
+-
+     companion object {
+         private const val TAG = "NearbyMgr"
+-
+-        /** Service ID uniquely identifies this app's mesh network. */
+         private const val SERVICE_ID = "com.example.resqmesh.MESH"
+-
+         private val STRATEGY = Strategy.P2P_CLUSTER
++        private const val MAX_ATTEMPTS = 2
++        private const val TIMEOUT_MS = 15000L
++        private const val FALLBACK_DELAY_MS = 8000L
++        private const val COOLDOWN_MS = 10000L
+     }
+ 
+-    // ── State (guarded by lock) ───────────────────────────────────────────────
+-
+-    private val lock = ReentrantLock()
+-
+-    /** Endpoints we have successfully completed connection to (endpointId → name). */
+-    private val connectedPeers = mutableMapOf<String, String>()
++    enum class PeerState {
++        DISCOVERED, QUEUED, REQUESTING, INITIATED, CONNECTED, COOLDOWN
++    }
+ 
+-    private val pendingConnections = mutableSetOf<String>()
++    private data class Peer(
++        val endpointId: String,
++        val name: String,
++        var state: PeerState = PeerState.DISCOVERED,
++        var attempts: Int = 0,
++        var activeAttemptId: Long = 0L
++    )
+ 
+-    /** Cache of endpoint names from onConnectionInitiated, needed for onConnectionResult */
+-    private val pendingNames = mutableMapOf<String, String>()
++    private val lock = ReentrantLock()
++    private val peers = mutableMapOf<String, Peer>()
++    private val outgoingQueue = mutableListOf<String>()
++    private var activeOutgoingEndpoint: String? = null
++    
++    private val handler = Handler(Looper.getMainLooper())
+ 
+     private var isAdvertising = false
+     private var isDiscovering = false
+ 
+-    // ── Nearby Connections client ─────────────────────────────────────────────
++    private val connectionsClient: ConnectionsClient = Nearby.getConnectionsClient(context.applicationContext)
++    val localEndpointName: String = android.os.Build.MODEL.replace(Regex("[^A-Za-z0-9 ]"), "").take(20).ifBlank { "ResQDevice" }
+ 
+-    private val connectionsClient: ConnectionsClient =
+-        Nearby.getConnectionsClient(context.applicationContext)
+-
+-    /** Human-readable name broadcast to nearby peers. */
+-    val localEndpointName: String = android.os.Build.MODEL
+-        .replace(Regex("[^A-Za-z0-9 ]"), "")
+-        .take(20)
+-        .ifBlank { "ResQDevice" }
+-
+-    // ── Public API ────────────────────────────────────────────────────────────
+-
+-    /**
+-     * Start advertising + discovering simultaneously so both sides can
+-     * initiate connections (P2P_CLUSTER pattern).
+-     */
+     fun startMesh() {
+         Log.i(TAG, "startMesh() called at ${System.currentTimeMillis()} ms — localName='$localEndpointName'")
+         startAdvertising()
+         startDiscovering()
+     }
+ 
+-    /** Stop all Nearby activity and disconnect all peers. */
+     fun stopMesh() {
+         Log.i(TAG, "stopMesh() called at ${System.currentTimeMillis()} ms")
+         connectionsClient.stopAdvertising()
+         connectionsClient.stopDiscovery()
+         connectionsClient.stopAllEndpoints()
++        handler.removeCallbacksAndMessages(null)
+         lock.withLock {
+             isAdvertising = false
+             isDiscovering = false
+-            connectedPeers.clear()
+-            pendingConnections.clear()
+-            pendingNames.clear()
++            peers.clear()
++            outgoingQueue.clear()
++            activeOutgoingEndpoint = null
+         }
+         listener.onStatusChanged("Mesh stopped")
+     }
+ 
+-    /** Send a UTF-8 text message to every connected peer. */
+     fun sendMessage(text: String) {
+-        val peers = lock.withLock { connectedPeers.keys.toList() }
+-        if (peers.isEmpty()) {
++        val connectedEndpointIds = lock.withLock {
++            peers.values.filter { it.state == PeerState.CONNECTED }.map { it.endpointId }
++        }
++        if (connectedEndpointIds.isEmpty()) {
+             listener.onError("No connected peers to send to")
+             return
+         }
+         val payload = Payload.fromBytes(text.toByteArray(StandardCharsets.UTF_8))
+-        peers.forEach { endpointId ->
+-            connectionsClient.sendPayload(endpointId, payload)
+-                .addOnFailureListener { e ->
+-                    val code = (e as? com.google.android.gms.common.api.ApiException)?.statusCode
+-                    val name = code?.let { ConnectionsStatusCodes.getStatusCodeString(it) } ?: "UNKNOWN"
+-                    Log.e(TAG, "sendPayload FAILED: endpoint=$endpointId statusCode=$code ($name) msg=${e.message}")
+-                    listener.onError("Send failed to $endpointId: code $code ($name), ${e.message}")
+-                }
++        connectedEndpointIds.forEach { endpointId ->
++            connectionsClient.sendPayload(endpointId, payload).addOnFailureListener { e ->
++                val code = (e as? com.google.android.gms.common.api.ApiException)?.statusCode
++                val name = code?.let { ConnectionsStatusCodes.getStatusCodeString(it) } ?: "UNKNOWN"
++                Log.e(TAG, "sendPayload FAILED: endpoint=$endpointId statusCode=$code ($name) msg=${e.message}")
++                listener.onError("Send failed to $endpointId: code $code ($name), ${e.message}")
++            }
+         }
+     }
+ 
+-    /** Returns a snapshot of currently connected peer names. */
+-    fun getConnectedPeerNames(): List<String> =
+-        lock.withLock { connectedPeers.values.toList() }
+-
+-    // ── Advertising ───────────────────────────────────────────────────────────
++    fun getConnectedPeerNames(): List<String> = lock.withLock {
++        peers.values.filter { it.state == PeerState.CONNECTED }.map { it.name }
++    }
+ 
+     private fun startAdvertising() {
+         val options = AdvertisingOptions.Builder().setStrategy(STRATEGY).setLowPower(true).build()
+-        connectionsClient.startAdvertising(
+-            localEndpointName,
+-            SERVICE_ID,
+-            connectionLifecycleCallback,
+-            options
+-        ).addOnSuccessListener {
+-            lock.withLock { isAdvertising = true }
+-            Log.i(TAG, "Advertising (low-power) started as '$localEndpointName'")
+-            listener.onStatusChanged("Advertising as $localEndpointName…")
+-        }.addOnFailureListener { e ->
+-            val statusCode = (e as? com.google.android.gms.common.api.ApiException)?.statusCode
+-            val statusName = statusCode?.let { ConnectionsStatusCodes.getStatusCodeString(it) } ?: "UNKNOWN"
+-            Log.e(TAG, "startAdvertising FAILED at ${System.currentTimeMillis()} ms: " +
+-                "statusCode=$statusCode ($statusName) msg=${e.message}", e)
+-            listener.onError("Advertising failed: status $statusCode ($statusName), ${e.message}")
+-        }
++        connectionsClient.startAdvertising(localEndpointName, SERVICE_ID, connectionLifecycleCallback, options)
++            .addOnSuccessListener {
++                lock.withLock { isAdvertising = true }
++                Log.i(TAG, "Advertising (low-power) started as '$localEndpointName'")
++                listener.onStatusChanged("Advertising as $localEndpointName…")
++            }.addOnFailureListener { e ->
++                val statusCode = (e as? com.google.android.gms.common.api.ApiException)?.statusCode
++                val statusName = statusCode?.let { ConnectionsStatusCodes.getStatusCodeString(it) } ?: "UNKNOWN"
++                Log.e(TAG, "startAdvertising FAILED at ${System.currentTimeMillis()} ms: statusCode=$statusCode ($statusName) msg=${e.message}", e)
++                listener.onError("Advertising failed: status $statusCode ($statusName), ${e.message}")
++            }
+     }
+ 
+-    // ── Discovery ─────────────────────────────────────────────────────────────
+-
+     private fun startDiscovering() {
+         val options = DiscoveryOptions.Builder().setStrategy(STRATEGY).setLowPower(true).build()
+-        connectionsClient.startDiscovery(
+-            SERVICE_ID,
+-            endpointDiscoveryCallback,
+-            options
+-        ).addOnSuccessListener {
+-            lock.withLock { isDiscovering = true }
+-            Log.i(TAG, "Discovery (low-power) started")
+-            listener.onStatusChanged("Advertising + discovering…")
+-        }.addOnFailureListener { e ->
+-            val statusCode = (e as? com.google.android.gms.common.api.ApiException)?.statusCode
+-            val statusName = statusCode?.let { ConnectionsStatusCodes.getStatusCodeString(it) } ?: "UNKNOWN"
+-            Log.e(TAG, "startDiscovery FAILED at ${System.currentTimeMillis()} ms: " +
+-                "statusCode=$statusCode ($statusName) msg=${e.message}", e)
+-            listener.onError("Discovery failed: status $statusCode ($statusName), ${e.message}")
++        connectionsClient.startDiscovery(SERVICE_ID, endpointDiscoveryCallback, options)
++            .addOnSuccessListener {
++                lock.withLock { isDiscovering = true }
++                Log.i(TAG, "Discovery (low-power) started")
++                listener.onStatusChanged("Advertising + discovering…")
++            }.addOnFailureListener { e ->
++                val statusCode = (e as? com.google.android.gms.common.api.ApiException)?.statusCode
++                val statusName = statusCode?.let { ConnectionsStatusCodes.getStatusCodeString(it) } ?: "UNKNOWN"
++                Log.e(TAG, "startDiscovery FAILED at ${System.currentTimeMillis()} ms: statusCode=$statusCode ($statusName) msg=${e.message}", e)
++                listener.onError("Discovery failed: status $statusCode ($statusName), ${e.message}")
++            }
++    }
++
++    private fun pumpQueue() {
++        val endpointToRequest = lock.withLock {
++            if (activeOutgoingEndpoint != null) return
++            
++            val iterator = outgoingQueue.iterator()
++            var nextToProcess: String? = null
++            while (iterator.hasNext()) {
++                val id = iterator.next()
++                val peer = peers[id]
++                iterator.remove() // Always remove from queue, we will either process or drop
++                if (peer != null && peer.state == PeerState.QUEUED) {
++                    if (peer.attempts < MAX_ATTEMPTS) {
++                        nextToProcess = id
++                        break
++                    } else {
++                        Log.w(TAG, "Dropping queued request to $id: MAX_ATTEMPTS reached")
++                        peer.state = PeerState.COOLDOWN
++                        scheduleCooldownReset(id)
++                    }
++                }
++            }
++            
++            nextToProcess?.let { id ->
++                val peer = peers[id]!!
++                activeOutgoingEndpoint = id
++                peer.state = PeerState.REQUESTING
++                peer.attempts++
++                peer.activeAttemptId = System.currentTimeMillis()
++                
++                // Schedule local timeout
++                val attemptId = peer.activeAttemptId
++                handler.postDelayed({ handleRequestTimeout(id, attemptId) }, TIMEOUT_MS)
++                
++                peer
++            }
++        }
++
++        endpointToRequest?.let { peer ->
++            Log.i(TAG, "requestConnection -> ${peer.endpointId} ('${peer.name}') [Attempt ${peer.attempts}]")
++            connectionsClient.requestConnection(localEndpointName, peer.endpointId, connectionLifecycleCallback)
++                .addOnSuccessListener {
++                    Log.i(TAG, "requestConnection accepted by GMS for endpoint ${peer.endpointId}")
++                }
++                .addOnFailureListener { e ->
++                    val code = (e as? com.google.android.gms.common.api.ApiException)?.statusCode
++                    val name = code?.let { ConnectionsStatusCodes.getStatusCodeString(it) } ?: "UNKNOWN"
++                    Log.e(TAG, "requestConnection FAILED instantly at ${System.currentTimeMillis()} ms: endpoint=${peer.endpointId} statusCode=$code ($name)", e)
++                    listener.onError("Connection request failed to ${peer.endpointId}: status $code ($name)")
++                    
++                    // Immediately reconcile state and pump queue
++                    lock.withLock {
++                        if (peers[peer.endpointId]?.activeAttemptId == peer.activeAttemptId) {
++                            reconcileFailure(peer.endpointId)
++                        }
++                    }
++                }
++        }
++    }
++
++    private fun handleRequestTimeout(endpointId: String, attemptId: Long) {
++        lock.withLock {
++            val peer = peers[endpointId] ?: return
++            if (peer.activeAttemptId == attemptId && (peer.state == PeerState.REQUESTING || peer.state == PeerState.INITIATED)) {
++                Log.e(TAG, "Request TIMEOUT for $endpointId in state ${peer.state}")
++                // The requirement: Reconcile its state and perform appropriate Nearby cleanup before pumping the queue.
++                connectionsClient.disconnectFromEndpoint(endpointId)
++                reconcileFailure(endpointId)
++            }
+         }
+     }
+ 
+-    // ── Endpoint discovery callback ───────────────────────────────────────────
++    private fun reconcileFailure(endpointId: String) {
++        // Must be called inside lock
++        val peer = peers[endpointId] ?: return
++        peer.state = PeerState.COOLDOWN
++        scheduleCooldownReset(endpointId)
++        
++        if (activeOutgoingEndpoint == endpointId) {
++            activeOutgoingEndpoint = null
++            // We use a handler post to avoid deep call stacks while holding lock
++            handler.post { pumpQueue() }
++        }
++    }
++
++    private fun scheduleCooldownReset(endpointId: String) {
++        handler.postDelayed({
++            lock.withLock {
++                val peer = peers[endpointId]
++                if (peer != null && peer.state == PeerState.COOLDOWN) {
++                    peer.state = PeerState.DISCOVERED
++                    Log.d(TAG, "Cooldown finished for $endpointId, resetting to DISCOVERED")
++                }
++            }
++        }, COOLDOWN_MS)
++    }
+ 
+     private val endpointDiscoveryCallback = object : EndpointDiscoveryCallback() {
+         override fun onEndpointFound(endpointId: String, info: DiscoveredEndpointInfo) {
+             Log.i(TAG, "onEndpointFound: id=$endpointId name='${info.endpointName}' serviceId='${info.serviceId}'")
++            
++            var shouldQueueImmediate = false
++            var shouldQueueDelayed = false
+ 
+-            val (shouldConnect, alreadyConnected, alreadyPending) = lock.withLock {
+-                val ac = connectedPeers.containsKey(endpointId)
+-                val ap = pendingConnections.contains(endpointId)
+-                val go = !ac && !ap
+-                if (go) pendingConnections.add(endpointId)
+-                Triple(go, ac, ap)
+-            }
+-
+-            if (!shouldConnect) {
+-                Log.d(TAG, "onEndpointFound: skipping requestConnection to $endpointId " +
+-                    "(alreadyConnected=$alreadyConnected alreadyPending=$alreadyPending)")
+-                return
+-            }
+-
+-            Log.i(TAG, "requestConnection → $endpointId ('${info.endpointName}') as localName='$localEndpointName'")
+-            connectionsClient.requestConnection(
+-                localEndpointName,
+-                endpointId,
+-                connectionLifecycleCallback
+-            ).addOnSuccessListener {
+-                Log.i(TAG, "requestConnection accepted by GMS for endpoint $endpointId")
+-            }.addOnFailureListener { e ->
+-                val code = (e as? com.google.android.gms.common.api.ApiException)?.statusCode
+-                val name = code?.let { ConnectionsStatusCodes.getStatusCodeString(it) } ?: "UNKNOWN"
+-                lock.withLock { pendingConnections.remove(endpointId) }
+-                Log.e(TAG, "requestConnection FAILED at ${System.currentTimeMillis()} ms: " +
+-                    "endpoint=$endpointId statusCode=$code ($name) msg=${e.message}", e)
+-                listener.onError("Connection request failed to $endpointId: status $code ($name), ${e.message}")
++            lock.withLock {
++                val peer = peers.getOrPut(endpointId) { Peer(endpointId, info.endpointName) }
++                
++                if (peer.state == PeerState.DISCOVERED) {
++                    if (peer.attempts >= MAX_ATTEMPTS) {
++                        Log.w(TAG, "Skipping $endpointId (Max attempts reached)")
++                        return@withLock
++                    }
++                    
++                    if (localEndpointName > info.endpointName) {
++                        peer.state = PeerState.QUEUED
++                        if (!outgoingQueue.contains(endpointId)) outgoingQueue.add(endpointId)
++                        shouldQueueImmediate = true
++                    } else {
++                        // We are the fallback initiator. Don't change state yet.
++                        shouldQueueDelayed = true
++                    }
++                } else {
++                    Log.d(TAG, "onEndpointFound: skipping $endpointId (Current state: ${peer.state})")
++                }
++            }
++
++            if (shouldQueueImmediate) {
++                pumpQueue()
++            } else if (shouldQueueDelayed) {
++                Log.i(TAG, "Scheduling delayed fallback request for $endpointId (Delay: ${FALLBACK_DELAY_MS}ms)")
++                handler.postDelayed({
++                    var triggerPump = false
++                    lock.withLock {
++                        val peer = peers[endpointId]
++                        // Only queue if it's STILL in DISCOVERED state. If an incoming connection arrived,
++                        // state will be INITIATED or CONNECTED, safely preventing collision.
++                        if (peer != null && peer.state == PeerState.DISCOVERED && peer.attempts < MAX_ATTEMPTS) {
++                            Log.i(TAG, "Fallback delay elapsed for $endpointId, queueing now.")
++                            peer.state = PeerState.QUEUED
++                            if (!outgoingQueue.contains(endpointId)) outgoingQueue.add(endpointId)
++                            triggerPump = true
++                        } else {
++                            Log.i(TAG, "Fallback delay elapsed for $endpointId, but state is ${peer?.state}. Aborting request.")
++                        }
++                    }
++                    if (triggerPump) pumpQueue()
++                }, FALLBACK_DELAY_MS)
+             }
+         }
+ 
+         override fun onEndpointLost(endpointId: String) {
+-            val wasPending: Boolean
+-            val wasConnected: Boolean
++            Log.i(TAG, "onEndpointLost: id=$endpointId")
++            // We do NOT remove connected/pending peers to avoid disrupting valid sessions on flaky discovery.
++            // But we can reset DISCOVERED ones to clean up.
+             lock.withLock {
+-                wasPending  = pendingConnections.remove(endpointId)
+-                wasConnected = connectedPeers.containsKey(endpointId)
+-                pendingNames.remove(endpointId)
++                val peer = peers[endpointId]
++                if (peer != null && peer.state == PeerState.DISCOVERED) {
++                    peers.remove(endpointId)
++                }
+             }
+-            Log.i(TAG, "onEndpointLost: id=$endpointId wasPending=$wasPending wasConnected=$wasConnected")
+         }
+     }
+ 
+-    // ── Connection lifecycle callback ─────────────────────────────────────────
+-
+     private val connectionLifecycleCallback = object : ConnectionLifecycleCallback() {
+         override fun onConnectionInitiated(endpointId: String, info: ConnectionInfo) {
+-            // isIncomingConnection=true  → remote side called requestConnection first (we are the advertiser).
+-            // isIncomingConnection=false → we called requestConnection first (we are the discoverer).
+-            Log.i(TAG, "onConnectionInitiated: id=$endpointId remoteName='${info.endpointName}' " +
+-                "isIncoming=${info.isIncomingConnection} token=${info.authenticationDigits}")
+-            lock.withLock { pendingNames[endpointId] = info.endpointName }
+-            // Auto-accept all incoming connections for the mesh prototype.
++            Log.i(TAG, "onConnectionInitiated: id=$endpointId remoteName='${info.endpointName}' isIncoming=${info.isIncomingConnection} token=${info.authenticationDigits}")
++            
++            lock.withLock {
++                val peer = peers.getOrPut(endpointId) { Peer(endpointId, info.endpointName) }
++                // Accept all incoming or active outgoing. Late callbacks on older attempt IDs are overwritten safely.
++                peer.state = PeerState.INITIATED
++                peer.activeAttemptId = System.currentTimeMillis() // Start a new phase ID
++                
++                // If it was in queue but arrived as incoming, remove it.
++                outgoingQueue.remove(endpointId)
++            }
++
+             Log.i(TAG, "acceptConnection → $endpointId")
+             connectionsClient.acceptConnection(endpointId, payloadCallback)
+                 .addOnSuccessListener {
+@@ -241,90 +327,112 @@
+                 }.addOnFailureListener { e ->
+                     val code = (e as? com.google.android.gms.common.api.ApiException)?.statusCode
+                     val name = code?.let { ConnectionsStatusCodes.getStatusCodeString(it) } ?: "UNKNOWN"
+-                    Log.e(TAG, "acceptConnection FAILED at ${System.currentTimeMillis()} ms: " +
+-                        "endpoint=$endpointId statusCode=$code ($name) msg=${e.message}", e)
+-                    listener.onError("Accept failed for $endpointId: status $code ($name), ${e.message}")
++                    Log.e(TAG, "acceptConnection FAILED at ${System.currentTimeMillis()} ms: endpoint=$endpointId statusCode=$code ($name)", e)
++                    listener.onError("Accept failed for $endpointId: status $code ($name)")
++                    
++                    lock.withLock { reconcileFailure(endpointId) }
+                 }
+         }
+ 
+         override fun onConnectionResult(endpointId: String, resolution: ConnectionResolution) {
+-            val nameFromInitiation = lock.withLock {
+-                pendingConnections.remove(endpointId)
+-                pendingNames.remove(endpointId)
++            val code = resolution.status.statusCode
++            val codeName = ConnectionsStatusCodes.getStatusCodeString(code)
++            val message = resolution.status.statusMessage ?: "(no message)"
++            val nowMs = System.currentTimeMillis()
++            
++            var wasActiveOutgoing = false
++            var peerName = endpointId.take(8)
++
++            lock.withLock {
++                val peer = peers[endpointId]
++                if (peer != null) {
++                    peerName = peer.name
++                    if (activeOutgoingEndpoint == endpointId) {
++                        wasActiveOutgoing = true
++                        activeOutgoingEndpoint = null
++                    }
++                    
++                    if (code == ConnectionsStatusCodes.STATUS_OK) {
++                        peer.state = PeerState.CONNECTED
++                        peer.attempts = 0 // Reset on full success
++                    } else {
++                        peer.state = PeerState.COOLDOWN
++                        scheduleCooldownReset(endpointId)
++                    }
++                }
+             }
+ 
+-            val code      = resolution.status.statusCode
+-            val message   = resolution.status.statusMessage ?: "(no message)"
+-            val codeName  = ConnectionsStatusCodes.getStatusCodeString(code)
+-            val nowMs     = System.currentTimeMillis()
+-            Log.i(TAG, "onConnectionResult at ${nowMs} ms: " +
+-                "id=$endpointId code=$code ($codeName) msg='$message' resolvedName='$nameFromInitiation'")
++            Log.i(TAG, "onConnectionResult at $nowMs ms: id=$endpointId code=$code ($codeName) msg='$message' resolvedName='$peerName'")
+ 
+             when (code) {
+                 ConnectionsStatusCodes.STATUS_OK -> {
+-                    val peerName = nameFromInitiation ?: endpointId.take(8)
+-                    lock.withLock { connectedPeers[endpointId] = peerName }
+                     Log.i(TAG, "STATUS_OK($code): connected to $endpointId as '$peerName'")
+                     listener.onPeerConnected(endpointId, peerName)
+                     listener.onStatusChanged("Connected to $peerName")
+                 }
+                 ConnectionsStatusCodes.STATUS_CONNECTION_REJECTED -> {
+-                    // Either side rejected. Both sides see this code.
+                     Log.w(TAG, "STATUS_CONNECTION_REJECTED($code/$codeName): $endpointId rejected the connection — $message")
+                     listener.onError("Connection rejected by $endpointId (code $code/$codeName)")
+                 }
+                 ConnectionsStatusCodes.STATUS_ERROR -> {
+-                    // Generic Nearby error — often wraps ENDPOINT_IO_ERROR at a higher layer.
+                     Log.e(TAG, "STATUS_ERROR($code/$codeName): connection setup failed for $endpointId — $message")
+                     listener.onError("Connection error for $endpointId (code $code/$codeName): $message")
+                 }
+                 8018 -> {
+-                    // STATUS_ENDPOINT_IO_ERROR — transport I/O failure (BLE L2CAP, Wi-Fi Direct, etc.).
+                     Log.e(TAG, "STATUS_ENDPOINT_IO_ERROR($code/$codeName): I/O failure for $endpointId — $message")
+                     listener.onError("Endpoint I/O error for $endpointId (code $code/$codeName): $message")
+                 }
+                 else -> {
+-                    // Log the raw numeric code and its SDK name for any other Nearby status.
+                     Log.w(TAG, "UNHANDLED status($code/$codeName) for $endpointId — $message")
+                     listener.onError("Unexpected connection status $code ($codeName) for $endpointId: $message")
+                 }
+             }
++            
++            if (wasActiveOutgoing) {
++                pumpQueue()
++            }
+         }
+ 
+         override fun onDisconnected(endpointId: String) {
+             val nowMs = System.currentTimeMillis()
+-            val (name, hadPending, hadName) = lock.withLock {
+-                val n  = connectedPeers.remove(endpointId)
+-                val hp = pendingConnections.remove(endpointId)
+-                val hn = pendingNames.remove(endpointId)
+-                Triple(n ?: endpointId.take(8), hp, hn)
+-            }
+-            // hadPending/hadName should normally be false here; if true it indicates
+-            // the connection was lost before onConnectionResult fired.
+-            Log.i(TAG, "onDisconnected at ${nowMs} ms: id=$endpointId resolvedName='$name' " +
+-                "hadPendingEntry=$hadPending hadPendingName=$hadName " +
+-                "remainingConnected=${lock.withLock { connectedPeers.size }}")
++            var peerName = endpointId.take(8)
++            var wasActiveOutgoing = false
++
++            val remainingCount = lock.withLock {
++                val peer = peers[endpointId]
++                if (peer != null) {
++                    peerName = peer.name
++                    peer.state = PeerState.COOLDOWN
++                    scheduleCooldownReset(endpointId)
++                }
++                if (activeOutgoingEndpoint == endpointId) {
++                    wasActiveOutgoing = true
++                    activeOutgoingEndpoint = null
++                }
++                peers.values.count { it.state == PeerState.CONNECTED }
++            }
++
++            Log.i(TAG, "onDisconnected at $nowMs ms: id=$endpointId resolvedName='$peerName' remainingConnected=$remainingCount")
+             listener.onPeerDisconnected(endpointId)
+-            listener.onStatusChanged("Disconnected from $name")
++            listener.onStatusChanged("Disconnected from $peerName")
++            
++            if (wasActiveOutgoing) {
++                pumpQueue()
++            }
+         }
+     }
+ 
+-    // ── Payload callback ──────────────────────────────────────────────────────
+-
+     private val payloadCallback = object : PayloadCallback() {
+         override fun onPayloadReceived(endpointId: String, payload: Payload) {
+             if (payload.type == Payload.Type.BYTES) {
+                 val bytes = payload.asBytes() ?: return
+                 val text = String(bytes, StandardCharsets.UTF_8)
+-                val senderName = lock.withLock { connectedPeers[endpointId] ?: endpointId.take(8) }
++                val senderName = lock.withLock { peers[endpointId]?.name ?: endpointId.take(8) }
+                 Log.i(TAG, "Message from $senderName: $text")
+                 listener.onMessageReceived(senderName, text)
+             }
+         }
+ 
+-        override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {
+-            // Only bytes payloads are used; no need to track transfer progress.
+-        }
++        override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {}
+     }
+-
+ }

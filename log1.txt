@@ -1,0 +1,59 @@
+sanskar@fedora:~/AndroidStudioProjects/ResQLink-Integrated$ adb -s 21f19bd2 logcat -c
+adb -s 21f19bd2 logcat -v time NearbyMgr:I NearbyConnections:I NearbyMediums:W '*:S'
+--------- beginning of main
+10-10 15:34:29.802 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:1) and reply a KEEP_ALIVE frame with ack from endpoint C8RI on channel ENCRYPTED_BLE.
+10-10 15:34:34.666 I/NearbyConnections( 4429): EndpointManager send a KEEP_ALIVE frame (seqNum:2) and sleep 5000 for endpoint C8RI.
+10-10 15:34:34.757 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:2) with ACK from endpoint C8RI on channel ENCRYPTED_BLE.
+10-10 15:34:34.798 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:2) and reply a KEEP_ALIVE frame with ack from endpoint C8RI on channel ENCRYPTED_BLE.
+10-10 15:34:39.672 I/NearbyConnections( 4429): EndpointManager send a KEEP_ALIVE frame (seqNum:3) and sleep 5000 for endpoint C8RI.
+10-10 15:34:39.741 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:3) with ACK from endpoint C8RI on channel ENCRYPTED_BLE.
+10-10 15:34:39.808 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:3) and reply a KEEP_ALIVE frame with ack from endpoint C8RI on channel ENCRYPTED_BLE.
+10-10 15:34:44.676 I/NearbyConnections( 4429): EndpointManager send a KEEP_ALIVE frame (seqNum:4) and sleep 5000 for endpoint C8RI.
+10-10 15:34:44.757 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:4) with ACK from endpoint C8RI on channel ENCRYPTED_BLE.
+10-10 15:34:44.803 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:4) and reply a KEEP_ALIVE frame with ack from endpoint C8RI on channel ENCRYPTED_BLE.
+10-10 15:34:49.680 I/NearbyConnections( 4429): EndpointManager send a KEEP_ALIVE frame (seqNum:5) and sleep 5000 for endpoint C8RI.
+10-10 15:34:49.773 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:5) with ACK from endpoint C8RI on channel ENCRYPTED_BLE.
+10-10 15:34:49.814 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:5) and reply a KEEP_ALIVE frame with ack from endpoint C8RI on channel ENCRYPTED_BLE.
+10-10 15:34:54.687 I/NearbyConnections( 4429): EndpointManager send a KEEP_ALIVE frame (seqNum:6) and sleep 5000 for endpoint C8RI.
+10-10 15:34:54.736 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:6) with ACK from endpoint C8RI on channel ENCRYPTED_BLE.
+10-10 15:34:54.825 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:6) and reply a KEEP_ALIVE frame with ack from endpoint C8RI on channel ENCRYPTED_BLE.
+10-10 15:34:59.690 I/NearbyConnections( 4429): EndpointManager send a KEEP_ALIVE frame (seqNum:7) and sleep 5000 for endpoint C8RI.
+10-10 15:34:59.734 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:7) with ACK from endpoint C8RI on channel ENCRYPTED_BLE.
+10-10 15:34:59.817 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:7) and reply a KEEP_ALIVE frame with ack from endpoint C8RI on channel ENCRYPTED_BLE.
+10-10 15:35:01.832 I/NearbyConnections( 4429): ClientProxy(com.example.resqmesh) reporting onPayloadReceived(C8RI, -9025565581106117755), with result: DETAIL_SUCCESS
+10-10 15:35:01.835 I/NearbyConnections( 4429): ClientProxy(com.example.resqmesh) reporting onPayloadTransferUpdate(C8RI, -9025565581106117755, SUCCESS, 100%) processed(payloadListener:non-null isClientAlive:true)
+10-10 15:35:01.853 I/NearbyConnections( 4429): [AutoResume] numSuccessfulAutoResume = 0, numFailedAutoResume = 0.
+10-10 15:35:01.854 I/NearbyConnections( 4429): [AutoResumeManager] clearPendingPayloadInfo for payloadId = -9025565581106117755, remaining number of payloadIds = 0.
+10-10 15:35:01.901 I/NearbyMgr( 9325): Message from RMX3521: Yoyo
+10-10 15:35:02.085 I/NearbyConnections( 4429): Client 112001645 is sending payload -6361689466580576215 of type BYTES to endpoints [C8RI].
+10-10 15:35:02.093 I/NearbyConnections( 4429): ClientProxy(com.example.resqmesh) reporting onPayloadTransferUpdate(C8RI, -6361689466580576215, SUCCESS, 100%) processed(payloadListener:non-null isClientAlive:true)
+10-10 15:35:02.094 I/NearbyConnections( 4429): [AutoResume] numSuccessfulAutoResume = 0, numFailedAutoResume = 0.
+10-10 15:35:02.094 I/NearbyConnections( 4429): [AutoResumeManager] clearPendingPayloadInfo for payloadId = -6361689466580576215, remaining number of payloadIds = 0.
+10-10 15:35:04.693 I/NearbyConnections( 4429): EndpointManager send a KEEP_ALIVE frame (seqNum:8) and sleep 5000 for endpoint C8RI.
+10-10 15:35:04.738 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:8) with ACK from endpoint C8RI on channel ENCRYPTED_BLE.
+10-10 15:35:04.828 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:8) and reply a KEEP_ALIVE frame with ack from endpoint C8RI on channel ENCRYPTED_BLE.
+10-10 15:35:06.722 I/NearbyConnections( 4429): Found BleAdvertisement [ 0x22 0xbe 0x9f 0x43 0x4d 0x4a 0x49 0x55 0x08 0x53 0x4d 0x4d 0x31 0x33 0x35 0x46 0x55 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 ] (with EndpointId MJIU and EndpointInfo [ 0x53 0x4d 0x4d 0x31 0x33 0x35 0x46 0x55 ])
+10-10 15:35:06.729 I/NearbyConnections( 4429): Unable to record discovered endpoint due to null currentDiscoveryPhase
+10-10 15:35:06.730 I/NearbyConnections( 4429): ClientProxy(112001645 com.example.resqmesh) reporting onEndpointFound(MJIU)
+10-10 15:35:06.735 I/NearbyConnections( 4429): ClientProxy(112001645) reporting onEndpointDistanceChanged(MJIU, UNKNOWN)
+10-10 15:35:06.787 I/NearbyMgr( 9325): onEndpointFound: id=MJIU name='SMM135FU' serviceId='com.example.resqmesh.MESH'
+10-10 15:35:06.787 I/NearbyMgr( 9325): requestConnection → MJIU ('SMM135FU') as localName='CPH2467'
+10-10 15:35:06.789 I/NearbyConnections( 4429): ClientProxy(com.example.resqmesh) allow WebRtc to use mobile data.
+10-10 15:35:06.789 I/NearbyConnections( 4429): Client 112001645 requested a connection to endpoint MJIU with mediums [USB, WIFI_LAN, WIFI_AWARE, BLUETOOTH, BLE, NFC].
+10-10 15:35:06.790 W/NearbyConnections( 4429): Unknown or unexpected device type : 0. Device type not set.
+10-10 15:35:06.800 I/NearbyConnections( 4429): [InstantConnectionPcpMgr] In getAvailableMediums() connectionMediums:[USB, WIFI_LAN, WIFI_AWARE, BLUETOOTH, BLE, NFC] supportedMediums:[WIFI_DIRECT, WIFI_HOTSPOT, WIFI_AWARE, WIFI_LAN] availableMediums:[]
+10-10 15:35:06.801 I/NearbyConnections( 4429): In requestConnection() serviceId:null hasDeviceProvider:false remoteDevice:null isInstantConnectionRequest:false hasConnectionRequestInfo:false hasOnGoingConnections:true endpointId:MJIU discoveredRemoteEndpointId:null connectionLifecycleListener:178942323 pcpManager:InstantConnectionPcpManager isSupportInstantConnection:true isDisableInstantConnectionsOnLegacyDevices:true
+10-10 15:35:06.804 I/NearbyConnections( 4429): Init Wifi info start (allowTurnOnWifi:true).
+10-10 15:35:06.812 I/NearbyConnections( 4429): Get local endpoint id from the existing localEndpointId:RT1R (last:null) for client 112001645(com.example.resqmesh)
+10-10 15:35:06.814 I/NearbyConnections( 4429): MediumManager failed to get IP address.
+10-10 15:35:06.814 I/NearbyConnections( 4429): In requestConnection(), client com.example.resqmesh attempting to connect to endpoint MJIU over mediums [BLE].
+10-10 15:35:06.817 I/NearbyConnections( 4429): Acquired pre-setup WakeLock NearbyConnections::ConnectionSetup for requestConnection to endpoint MJIU
+10-10 15:35:06.847 I/NearbyConnections( 4429): Init Wifi info complete took 43 ms.
+10-10 15:35:09.699 I/NearbyConnections( 4429): EndpointManager send a KEEP_ALIVE frame (seqNum:9) and sleep 5000 for endpoint C8RI.
+10-10 15:35:09.844 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:9) with ACK from endpoint C8RI on channel ENCRYPTED_BLE.
+10-10 15:35:09.845 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:9) and reply a KEEP_ALIVE frame with ack from endpoint C8RI on channel ENCRYPTED_BLE.
+10-10 15:35:10.336 E/NearbyMediums( 4429): MEDIUM_ERROR [SYSTEM][BLE][CONNECT][ESTABLISH_L2CAP_CONNECTION_FAILED][UNKNOWN], service-id=com.example.resqmesh.MESH
+10-10 15:35:10.336 E/NearbyMediums( 4429): Extra Sensitive/PII message : PSM : 147, Exception : read failed, socket might closed or timeout, read ret: -1
+10-10 15:35:14.701 I/NearbyConnections( 4429): EndpointManager send a KEEP_ALIVE frame (seqNum:10) and sleep 5000 for endpoint C8RI.
+10-10 15:35:14.759 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:10) with ACK from endpoint C8RI on channel ENCRYPTED_BLE.
+10-10 15:35:14.863 I/NearbyConnections( 4429): EndpointManager received a KEEP_ALIVE frame (seqNum:10) and reply a KEEP_ALIVE frame with ack from endpoint C8RI on channel ENCRYPTED_BLE.  this is the first log ive pasted the second one
